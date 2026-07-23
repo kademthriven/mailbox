@@ -172,6 +172,7 @@ describe('Login component', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    getMailboxFolder.mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -220,7 +221,7 @@ describe('Login component', () => {
     ).toBeInTheDocument()
   })
 
-  it('stores the Firebase token and displays the mailbox welcome screen', async () => {
+  it('stores the Firebase token and opens the received-mail inbox', async () => {
     const getIdToken = vi.fn().mockResolvedValue('firebase-id-token')
     signInWithEmailAndPassword.mockResolvedValueOnce({
       user: {
@@ -245,19 +246,24 @@ describe('Login component', () => {
     expect(localStorage.getItem(AUTH_EMAIL_KEY)).toBe('person@example.com')
     expect(
       await screen.findByRole('heading', {
-        name: 'Welcome to your mail box',
+        name: 'Inbox',
       }),
     ).toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenCalledWith({
+      email: 'person@example.com',
+      folder: 'inbox',
+      token: 'firebase-id-token',
+    })
   })
 
-  it('restores the welcome screen when a stored token is present', () => {
+  it('restores the inbox when a stored token is present', () => {
     localStorage.setItem(AUTH_TOKEN_KEY, 'persisted-token')
     localStorage.setItem(AUTH_EMAIL_KEY, 'returning@example.com')
 
     render(<App />)
 
     expect(
-      screen.getByRole('heading', { name: 'Welcome to your mail box' }),
+      screen.getByRole('heading', { name: 'Inbox' }),
     ).toBeInTheDocument()
     expect(screen.getByText('returning@example.com')).toBeInTheDocument()
   })
@@ -291,9 +297,7 @@ describe('Compose mail component', () => {
 
   const openComposer = async () => {
     const user = renderMailbox()
-    await user.click(
-      screen.getByRole('button', { name: /compose your first mail/i }),
-    )
+    await user.click(screen.getByRole('button', { name: /^compose$/i }))
     return user
   }
 
@@ -379,18 +383,16 @@ describe('Compose mail component', () => {
         createdAt: Date.now(),
       },
     ])
-    const user = renderMailbox()
+    renderMailbox()
 
-    await user.click(screen.getByRole('button', { name: /^inbox$/i }))
-
+    expect(
+      await screen.findByText('Hello from your inbox'),
+    ).toBeInTheDocument()
     expect(getMailboxFolder).toHaveBeenCalledWith({
       email: 'sender@example.com',
       folder: 'inbox',
       token: 'firebase-id-token',
     })
-    expect(
-      await screen.findByText('Hello from your inbox'),
-    ).toBeInTheDocument()
   })
 
   it('closes and discards the compose screen without sending', async () => {
@@ -400,7 +402,7 @@ describe('Compose mail component', () => {
 
     expect(sendMail).not.toHaveBeenCalled()
     expect(
-      screen.getByRole('heading', { name: 'Welcome to your mail box' }),
+      screen.getByRole('heading', { name: 'Inbox' }),
     ).toBeInTheDocument()
   })
 })

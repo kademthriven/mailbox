@@ -22,8 +22,8 @@ prevents incomplete submission, translates common Firebase errors, and logs
 `User has successfully signed up.` after successful account creation.
 
 On login, the app stores the Firebase ID token under `postlyAuthToken`, restores
-the mailbox while that token is present, and clears the stored session on
-logout.
+the mailbox while that token is present, opens the authenticated user's Inbox,
+and clears the stored session on logout.
 
 ## Compose and mail storage
 
@@ -41,6 +41,11 @@ mailboxes/{senderEmailKey}/sent/{messageId}
 Email addresses are normalized and converted to URL-safe mailbox keys. This
 structure lets recipients retrieve their inbox and senders retrieve their sent
 mail without downloading unrelated users' messages.
+
+The Inbox performs a Firebase REST `GET` for the signed-in email's mailbox key
+as soon as authentication succeeds. Messages are shown newest-first with sender,
+subject, body preview, and timestamp. Users can search the loaded messages,
+refresh from Firebase, or open the existing rich-text editor with **Compose**.
 
 ## Tests
 

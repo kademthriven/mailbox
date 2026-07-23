@@ -3,6 +3,7 @@ import {
   Alert,
   Badge,
   Button,
+  ButtonGroup,
   Card,
   Col,
   Container,
@@ -725,7 +726,7 @@ function ComposeMail({ senderEmail, onClose, onSent }) {
   )
 }
 
-function MailFolder({ folder, messages, loading, error }) {
+function MailFolder({ folder, messages, loading, error, onRefresh }) {
   const title = folder === 'inbox' ? 'Inbox' : 'Sent'
 
   return (
@@ -735,9 +736,25 @@ function MailFolder({ folder, messages, loading, error }) {
           <p>Your mail</p>
           <h1>{title}</h1>
         </div>
-        <Badge pill bg="light" text="primary">
-          {messages.length} {messages.length === 1 ? 'message' : 'messages'}
-        </Badge>
+        <Stack direction="horizontal" gap={3}>
+          <Badge pill bg="light" text="primary">
+            {messages.length} {messages.length === 1 ? 'message' : 'messages'}
+          </Badge>
+          <Button
+            type="button"
+            variant="light"
+            className="refresh-mail-button"
+            aria-label={`Refresh ${title}`}
+            title={`Refresh ${title}`}
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            <i
+              className={`bi bi-arrow-clockwise ${loading ? 'spin-icon' : ''}`}
+              aria-hidden="true"
+            />
+          </Button>
+        </Stack>
       </Card.Header>
 
       {error && (
@@ -764,47 +781,81 @@ function MailFolder({ folder, messages, loading, error }) {
           </p>
         </div>
       ) : (
-        <ListGroup variant="flush" className="mail-list">
-          {messages.map((message) => (
-            <ListGroup.Item key={message.id} className="mail-list-item">
-              <div className="mail-avatar" aria-hidden="true">
-                {(folder === 'inbox'
+        <>
+          <div className="mail-list-toolbar" aria-label={`${title} actions`}>
+            <Form.Check
+              type="checkbox"
+              aria-label={`Select all ${title.toLowerCase()} messages`}
+            />
+            <ButtonGroup aria-label="Mailbox actions">
+              <Button type="button" variant="link" disabled>
+                <i className="bi bi-archive me-2" aria-hidden="true" />
+                Archive
+              </Button>
+              <Button type="button" variant="link" disabled>
+                <i className="bi bi-trash3 me-2" aria-hidden="true" />
+                Delete
+              </Button>
+            </ButtonGroup>
+            <span className="mail-sort-label">
+              Newest first <i className="bi bi-chevron-down" />
+            </span>
+          </div>
+
+          <ListGroup variant="flush" className="mail-list">
+            {messages.map((message) => {
+              const correspondent =
+                folder === 'inbox'
                   ? message.senderEmail
-                  : message.recipientEmail
-                )
-                  .charAt(0)
-                  .toUpperCase()}
-              </div>
-              <div className="mail-summary">
-                <div className="mail-summary-top">
-                  <strong>
-                    {folder === 'inbox'
-                      ? message.senderEmail
-                      : `To: ${message.recipientEmail}`}
-                  </strong>
+                  : `To: ${message.recipientEmail}`
+
+              return (
+                <ListGroup.Item key={message.id} className="mail-list-item">
+                  <Form.Check
+                    type="checkbox"
+                    className="mail-row-selector"
+                    aria-label={`Select message from ${correspondent}`}
+                  />
+                  <span
+                    className={`unread-dot ${message.read ? 'is-read' : ''}`}
+                    aria-label={message.read ? 'Read message' : 'Unread message'}
+                  />
+                  <strong className="mail-correspondent">{correspondent}</strong>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="mail-star"
+                    aria-label={`Star message: ${message.subject}`}
+                  >
+                    <i className="bi bi-star" aria-hidden="true" />
+                  </Button>
+                  <div className="mail-summary">
+                    <h2>{message.subject}</h2>
+                    <span aria-hidden="true">—</span>
+                    <p>{message.bodyText}</p>
+                  </div>
                   <time dateTime={new Date(message.createdAt).toISOString()}>
                     {formatMailDate(message.createdAt)}
                   </time>
-                </div>
-                <h2>{message.subject}</h2>
-                <p>{message.bodyText}</p>
-              </div>
-            </ListGroup.Item>
-          ))}
-        </ListGroup>
+                </ListGroup.Item>
+              )
+            })}
+          </ListGroup>
+        </>
       )}
     </Card>
   )
 }
 
 function MailboxScreen({ email, onLogout }) {
-  const [activeFolder, setActiveFolder] = useState('welcome')
+  const [activeFolder, setActiveFolder] = useState('inbox')
   const [isComposing, setIsComposing] = useState(false)
   const [messages, setMessages] = useState([])
-  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [loadingMessages, setLoadingMessages] = useState(true)
   const [mailError, setMailError] = useState('')
   const [sentNotice, setSentNotice] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
+  const [searchQuery, setSearchQuery] = useState('')
 
   const loadFolder = useCallback(async () => {
     if (!['inbox', 'sent'].includes(activeFolder)) {
@@ -850,17 +901,37 @@ function MailboxScreen({ email, onLogout }) {
     setRefreshKey((value) => value + 1)
   }
 
+  const refreshFolder = () => {
+    setLoadingMessages(true)
+    setMailError('')
+    setRefreshKey((value) => value + 1)
+  }
+
+  const normalizedSearch = searchQuery.trim().toLowerCase()
+  const visibleMessages = normalizedSearch
+    ? messages.filter((message) =>
+        [
+          message.senderEmail,
+          message.recipientEmail,
+          message.subject,
+          message.bodyText,
+        ].some((value) => value?.toLowerCase().includes(normalizedSearch)),
+      )
+    : messages
+
   return (
     <div className="mailbox-screen">
       <Navbar className="site-navbar mailbox-navbar">
         <Container fluid className="px-lg-4">
-          <Brand onClick={() => openFolder('welcome')} />
+          <Brand onClick={() => openFolder('inbox')} />
           <Form className="mailbox-search d-none d-md-flex" role="search">
             <i className="bi bi-search" aria-hidden="true" />
             <Form.Control
               type="search"
               placeholder="Search mail"
               aria-label="Search mail"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
             />
           </Form>
           <Stack direction="horizontal" gap={3}>
@@ -996,9 +1067,10 @@ function MailboxScreen({ email, onLogout }) {
           ) : (
             <MailFolder
               folder={activeFolder}
-              messages={messages}
+              messages={visibleMessages}
               loading={loadingMessages}
               error={mailError}
+              onRefresh={refreshFolder}
             />
           )}
         </section>
