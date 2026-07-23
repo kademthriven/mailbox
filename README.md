@@ -17,3 +17,13 @@ The form requires email, password, and password confirmation. It prevents
 submission until the fields are complete and the passwords match, translates
 common Firebase errors into user-friendly messages, and logs
 `User has successfully signed up.` after successful account creation.
+
+## Tests
+
+Run the signup component test suite once with:
+
+```bash
+npm run test:run
+```
+
+Use `npm test` while developing to run Vitest in watch mode.
