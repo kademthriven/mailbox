@@ -53,11 +53,13 @@ subject, body preview, timestamp, and a blue unread marker. Mailbox API data is
 kept in a reducer so the list, selected message, and sidebar unread total stay in
 sync. Opening a message shows its complete content and immediately updates its
 Inbox copy to `read: true` through Firebase REST, so it remains read after a page
-refresh. Users can also search the loaded messages, refresh from Firebase, or
-open the existing rich-text editor with **Compose**. Each mail row also has a
-delete action. Firebase removes only the signed-in user's copy from the current
-Inbox or Sent folder, then the reducer removes it from the visible list and
-updates the unread total.
+refresh. A background Firebase `GET` polls Inbox every two seconds, reconciles
+only changed messages, and keeps the unread total current even while Sent,
+Compose, or the message reader is open. Users can also search the loaded
+messages, refresh from Firebase, or open the existing rich-text editor with
+**Compose**. Each mail row also has a delete action. Firebase removes only the
+signed-in user's copy from the current Inbox or Sent folder, then the reducer
+removes it from the visible list and updates the unread total.
 
 ## Tests
 

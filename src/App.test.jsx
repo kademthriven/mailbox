@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -18,7 +19,11 @@ import {
   markMailAsRead,
   sendMail,
 } from './mailService'
-import App, { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY } from './App'
+import App, {
+  AUTH_EMAIL_KEY,
+  AUTH_TOKEN_KEY,
+  MAILBOX_POLL_INTERVAL_MS,
+} from './App'
 
 vi.mock('firebase/auth', () => ({
   createUserWithEmailAndPassword: vi.fn(),
@@ -1109,5 +1114,136 @@ describe('Sent box component', () => {
       await screen.findByText('Sent mail is unavailable.'),
     ).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Sent' })).toBeInTheDocument()
+  })
+})
+
+describe('Automatic Inbox polling', () => {
+  const incomingMessage = {
+    id: 'polled-message',
+    senderEmail: 'new-sender@example.com',
+    recipientEmail: 'receiver@example.com',
+    subject: 'A newly received message',
+    bodyText: 'This arrived without a manual refresh.',
+    createdAt: Date.now(),
+    read: false,
+  }
+
+  const renderPollingMailbox = () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'poll-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'receiver@example.com')
+    render(<App />)
+  }
+
+  const captureInboxPoll = (timerId) => {
+    const originalSetInterval = window.setInterval.bind(window)
+    let pollInbox
+
+    vi.spyOn(window, 'setInterval').mockImplementation(
+      (callback, delay, ...args) => {
+        if (delay === MAILBOX_POLL_INTERVAL_MS) {
+          pollInbox = callback
+          return timerId
+        }
+
+        return originalSetInterval(callback, delay, ...args)
+      },
+    )
+
+    return () => pollInbox
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getMailboxFolder.mockReset()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('requests Inbox every two seconds and displays newly received mail', async () => {
+    const getPollInbox = captureInboxPoll(42)
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([incomingMessage])
+    renderPollingMailbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    expect(window.setInterval).toHaveBeenCalledWith(
+      expect.any(Function),
+      MAILBOX_POLL_INTERVAL_MS,
+    )
+
+    await act(async () => {
+      await getPollInbox()()
+    })
+
+    expect(screen.getByText('A newly received message')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unread message')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+    expect(getMailboxFolder).toHaveBeenLastCalledWith({
+      email: 'receiver@example.com',
+      folder: 'inbox',
+      token: 'poll-token',
+    })
+  })
+
+  it('updates the unread total while preserving the active Sent list', async () => {
+    const getPollInbox = captureInboxPoll(43)
+    const sentMessage = {
+      ...incomingMessage,
+      id: 'sent-message',
+      senderEmail: 'receiver@example.com',
+      recipientEmail: 'friend@example.com',
+      subject: 'Existing sent message',
+      read: true,
+    }
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([sentMessage])
+      .mockResolvedValueOnce([incomingMessage])
+    renderPollingMailbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+    expect(await screen.findByText('Existing sent message')).toBeInTheDocument()
+
+    await act(async () => {
+      await getPollInbox()()
+    })
+
+    expect(screen.getByText('Existing sent message')).toBeInTheDocument()
+    expect(screen.queryByText('A newly received message')).not.toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+  })
+
+  it('skips overlapping Inbox requests while a poll is still pending', async () => {
+    let resolvePoll
+    const getPollInbox = captureInboxPoll(44)
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolvePoll = resolve
+        }),
+      )
+    renderPollingMailbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    const firstPoll = getPollInbox()()
+    const overlappingPoll = getPollInbox()()
+
+    await expect(overlappingPoll).resolves.toBeUndefined()
+    expect(getMailboxFolder).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      resolvePoll([incomingMessage])
+      await firstPoll
+    })
+
+    expect(screen.getByText('A newly received message')).toBeInTheDocument()
   })
 })

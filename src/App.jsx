@@ -43,6 +43,7 @@ const RichTextEditor = lazy(() => import('./RichTextEditor'))
 
 export const AUTH_TOKEN_KEY = 'postlyAuthToken'
 export const AUTH_EMAIL_KEY = 'postlyUserEmail'
+export const MAILBOX_POLL_INTERVAL_MS = 2000
 
 const signupErrorMessages = {
   'auth/email-already-in-use':
@@ -1022,6 +1023,48 @@ function MailboxScreen({ email, onLogout }) {
     return () => window.clearTimeout(loadTimer)
   }, [loadFolder, refreshKey])
 
+  useEffect(() => {
+    let cancelled = false
+    let requestInFlight = false
+
+    const pollInbox = async () => {
+      if (requestInFlight) {
+        return
+      }
+
+      requestInFlight = true
+
+      try {
+        const inboxMessages = await getMailboxFolder({
+          email,
+          folder: 'inbox',
+          token: localStorage.getItem(AUTH_TOKEN_KEY),
+        })
+
+        if (!cancelled) {
+          dispatch({
+            type: 'inbox/pollSucceeded',
+            messages: inboxMessages,
+          })
+        }
+      } catch {
+        // Keep the last successful Inbox data visible during a transient poll failure.
+      } finally {
+        requestInFlight = false
+      }
+    }
+
+    const pollTimer = window.setInterval(
+      pollInbox,
+      MAILBOX_POLL_INTERVAL_MS,
+    )
+
+    return () => {
+      cancelled = true
+      window.clearInterval(pollTimer)
+    }
+  }, [email])
+
   const openFolder = (folder) => {
     dispatch({ type: 'folder/opened', folder })
   }
@@ -1047,6 +1090,10 @@ function MailboxScreen({ email, onLogout }) {
         message,
         recipientEmail: email,
         token: localStorage.getItem(AUTH_TOKEN_KEY),
+      })
+      dispatch({
+        type: 'message/readSucceeded',
+        messageId: message.id,
       })
     } catch (error) {
       dispatch({

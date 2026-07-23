@@ -10,10 +10,54 @@ export const initialMailboxState = {
   selectedMessage: null,
   unreadCount: 0,
   deletingMessageIds: [],
+  markingReadMessageIds: [],
 }
 
 const countUnread = (messages) =>
   messages.reduce((total, message) => total + (message.read ? 0 : 1), 0)
+
+const messageFields = [
+  'id',
+  'senderEmail',
+  'recipientEmail',
+  'subject',
+  'bodyHtml',
+  'bodyText',
+  'createdAt',
+  'read',
+]
+
+const messagesAreEqual = (first, second) =>
+  messageFields.every((field) => first[field] === second[field])
+
+const reconcileMessages = (currentMessages, incomingMessages) => {
+  if (
+    currentMessages.length === incomingMessages.length &&
+    currentMessages.every((message, index) =>
+      messagesAreEqual(message, incomingMessages[index]),
+    )
+  ) {
+    return currentMessages
+  }
+
+  const currentById = new Map(
+    currentMessages.map((message) => [message.id, message]),
+  )
+
+  return incomingMessages.map((message) => {
+    const currentMessage = currentById.get(message.id)
+    return currentMessage && messagesAreEqual(currentMessage, message)
+      ? currentMessage
+      : message
+  })
+}
+
+const preservePendingReadStatus = (messages, markingReadMessageIds) =>
+  messages.map((message) =>
+    markingReadMessageIds.includes(message.id) && !message.read
+      ? { ...message, read: true }
+      : message,
+  )
 
 export function mailboxReducer(state, action) {
   switch (action.type) {
@@ -30,21 +74,30 @@ export function mailboxReducer(state, action) {
         refreshKey: state.refreshKey + 1,
       }
 
-    case 'folder/loadSucceeded':
+    case 'folder/loadSucceeded': {
       if (action.folder !== state.activeFolder) {
         return state
       }
 
+      const loadedMessages =
+        action.folder === 'inbox'
+          ? preservePendingReadStatus(
+              action.messages,
+              state.markingReadMessageIds,
+            )
+          : action.messages
+
       return {
         ...state,
-        messages: action.messages,
+        messages: reconcileMessages(state.messages, loadedMessages),
         loadingMessages: false,
         mailError: '',
         unreadCount:
           action.folder === 'inbox'
-            ? countUnread(action.messages)
+            ? countUnread(loadedMessages)
             : state.unreadCount,
       }
+    }
 
     case 'folder/loadFailed':
       if (action.folder !== state.activeFolder) {
@@ -97,6 +150,26 @@ export function mailboxReducer(state, action) {
     case 'search/changed':
       return { ...state, searchQuery: action.query }
 
+    case 'inbox/pollSucceeded': {
+      const inboxMessages = preservePendingReadStatus(
+        action.messages,
+        state.markingReadMessageIds,
+      )
+      const unreadCount = countUnread(inboxMessages)
+
+      if (state.activeFolder !== 'inbox') {
+        return unreadCount === state.unreadCount
+          ? state
+          : { ...state, unreadCount }
+      }
+
+      const messages = reconcileMessages(state.messages, inboxMessages)
+
+      return messages === state.messages && unreadCount === state.unreadCount
+        ? state
+        : { ...state, messages, unreadCount }
+    }
+
     case 'message/opened': {
       const shouldMarkRead =
         state.activeFolder === 'inbox' && !action.message.read
@@ -117,9 +190,20 @@ export function mailboxReducer(state, action) {
         unreadCount: shouldMarkRead
           ? Math.max(0, state.unreadCount - 1)
           : state.unreadCount,
+        markingReadMessageIds: shouldMarkRead
+          ? [...state.markingReadMessageIds, action.message.id]
+          : state.markingReadMessageIds,
         mailError: '',
       }
     }
+
+    case 'message/readSucceeded':
+      return {
+        ...state,
+        markingReadMessageIds: state.markingReadMessageIds.filter(
+          (messageId) => messageId !== action.messageId,
+        ),
+      }
 
     case 'message/readFailed':
       return {
@@ -134,6 +218,9 @@ export function mailboxReducer(state, action) {
             : message,
         ),
         unreadCount: state.unreadCount + 1,
+        markingReadMessageIds: state.markingReadMessageIds.filter(
+          (messageId) => messageId !== action.messageId,
+        ),
         mailError: action.error,
       }
 
