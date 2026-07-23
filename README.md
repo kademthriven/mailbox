@@ -25,6 +25,19 @@ On login, the app stores the Firebase ID token under `postlyAuthToken`, restores
 the mailbox while that token is present, opens the authenticated user's Inbox,
 and clears the stored session on logout.
 
+## Custom hooks
+
+Firebase calls are isolated from presentation components:
+
+- `useAuthApi` owns account creation, login, and logout.
+- `useMailApi` owns send, folder retrieval, mark-as-read, and delete requests,
+  and attaches the stored ID token.
+- `useMailboxFolder` owns Inbox/Sent loading and refresh effects.
+- `useInboxPolling` owns the optimized two-second Inbox polling lifecycle.
+
+This keeps API details and repeated effects reusable while the React Bootstrap
+components focus on rendering and user interaction.
+
 ## Compose and mail storage
 
 The composer uses Tiptap for bold, italic, list, highlight, undo, and redo

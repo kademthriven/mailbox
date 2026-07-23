@@ -2,7 +2,6 @@ import {
   lazy,
   Suspense,
   useCallback,
-  useEffect,
   useReducer,
   useState,
 } from 'react'
@@ -23,27 +22,25 @@ import {
   Spinner,
   Stack,
 } from 'react-bootstrap'
+import { isFirebaseConfigured } from './firebase'
+import { isMailDatabaseConfigured } from './mailService'
+import { useAuthApi } from './hooks/useAuthApi'
+import { useMailApi } from './hooks/useMailApi'
 import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-} from 'firebase/auth'
-import { auth, isFirebaseConfigured } from './firebase'
-import {
-  deleteMail,
-  getMailboxFolder,
-  isMailDatabaseConfigured,
-  markMailAsRead,
-  sendMail,
-} from './mailService'
+  useInboxPolling,
+  useMailboxFolder,
+} from './hooks/useMailboxSync'
 import { initialMailboxState, mailboxReducer } from './mailboxReducer'
+import {
+  AUTH_EMAIL_KEY,
+  AUTH_TOKEN_KEY,
+  MAILBOX_POLL_INTERVAL_MS,
+} from './storageKeys'
 import './App.css'
 
 const RichTextEditor = lazy(() => import('./RichTextEditor'))
 
-export const AUTH_TOKEN_KEY = 'postlyAuthToken'
-export const AUTH_EMAIL_KEY = 'postlyUserEmail'
-export const MAILBOX_POLL_INTERVAL_MS = 2000
+export { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY, MAILBOX_POLL_INTERVAL_MS }
 
 const signupErrorMessages = {
   'auth/email-already-in-use':
@@ -171,6 +168,7 @@ function AuthIntro({ screen }) {
 }
 
 function SignupCard({ onLogin }) {
+  const { createAccount, isAuthAvailable } = useAuthApi()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -200,7 +198,7 @@ function SignupCard({ onLogin }) {
       return
     }
 
-    if (!isFirebaseConfigured || !auth) {
+    if (!isFirebaseConfigured || !isAuthAvailable) {
       setError(
         'Authentication is not configured yet. Add your Firebase settings to the environment file and try again.',
       )
@@ -210,7 +208,7 @@ function SignupCard({ onLogin }) {
     setLoading(true)
 
     try {
-      await createUserWithEmailAndPassword(auth, email.trim(), password)
+      await createAccount(email.trim(), password)
       console.log('User has successfully signed up.')
       setSuccess(true)
     } catch (firebaseError) {
@@ -397,6 +395,7 @@ function SignupCard({ onLogin }) {
 }
 
 function LoginCard({ onSignup, onAuthenticated }) {
+  const { authenticate, isAuthAvailable } = useAuthApi()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -417,7 +416,7 @@ function LoginCard({ onSignup, onAuthenticated }) {
       return
     }
 
-    if (!isFirebaseConfigured || !auth) {
+    if (!isFirebaseConfigured || !isAuthAvailable) {
       setError(
         'Authentication is not configured yet. Add your Firebase settings to the environment file and try again.',
       )
@@ -427,11 +426,7 @@ function LoginCard({ onSignup, onAuthenticated }) {
     setLoading(true)
 
     try {
-      const userCredential = await signInWithEmailAndPassword(
-        auth,
-        email.trim(),
-        password,
-      )
+      const userCredential = await authenticate(email.trim(), password)
       const token = await userCredential.user.getIdToken()
       const authenticatedEmail = userCredential.user.email || email.trim()
 
@@ -579,6 +574,7 @@ const formatMailDate = (timestamp) =>
   }).format(timestamp)
 
 function ComposeMail({ senderEmail, onClose, onSent }) {
+  const { sendMessage } = useMailApi()
   const [recipientEmail, setRecipientEmail] = useState('')
   const [subject, setSubject] = useState('')
   const [messageBody, setMessageBody] = useState({
@@ -608,13 +604,12 @@ function ComposeMail({ senderEmail, onClose, onSent }) {
     setLoading(true)
 
     try {
-      const message = await sendMail({
+      const message = await sendMessage({
         senderEmail,
         recipientEmail,
         subject,
         bodyHtml: messageBody.html,
         bodyText: messageBody.text,
-        token: localStorage.getItem(AUTH_TOKEN_KEY),
       })
       onSent(message)
     } catch (mailError) {
@@ -974,6 +969,7 @@ function MailMessageDetail({ folder, message, error, onBack }) {
 }
 
 function MailboxScreen({ email, onLogout }) {
+  const { markMessageAsRead, removeMessage } = useMailApi()
   const [mailboxState, dispatch] = useReducer(
     mailboxReducer,
     initialMailboxState,
@@ -992,78 +988,42 @@ function MailboxScreen({ email, onLogout }) {
     deletingMessageIds,
   } = mailboxState
 
-  const loadFolder = useCallback(async () => {
-    if (!['inbox', 'sent'].includes(activeFolder)) {
-      return
-    }
+  const handleFolderLoaded = useCallback((folder, folderMessages) => {
+    dispatch({
+      type: 'folder/loadSucceeded',
+      folder,
+      messages: folderMessages,
+    })
+  }, [])
 
-    try {
-      const folderMessages = await getMailboxFolder({
-        email,
-        folder: activeFolder,
-        token: localStorage.getItem(AUTH_TOKEN_KEY),
-      })
-      dispatch({
-        type: 'folder/loadSucceeded',
-        folder: activeFolder,
-        messages: folderMessages,
-      })
-    } catch (error) {
-      dispatch({
-        type: 'folder/loadFailed',
-        folder: activeFolder,
-        error:
-          error.message || 'We could not load this folder. Please try again.',
-      })
-    }
-  }, [activeFolder, email])
+  const handleFolderLoadError = useCallback((folder, error) => {
+    dispatch({
+      type: 'folder/loadFailed',
+      folder,
+      error:
+        error.message || 'We could not load this folder. Please try again.',
+    })
+  }, [])
 
-  useEffect(() => {
-    const loadTimer = window.setTimeout(loadFolder, 0)
-    return () => window.clearTimeout(loadTimer)
-  }, [loadFolder, refreshKey])
+  const handleInboxPoll = useCallback((inboxMessages) => {
+    dispatch({
+      type: 'inbox/pollSucceeded',
+      messages: inboxMessages,
+    })
+  }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    let requestInFlight = false
+  useMailboxFolder({
+    email,
+    folder: activeFolder,
+    refreshKey,
+    onSuccess: handleFolderLoaded,
+    onError: handleFolderLoadError,
+  })
 
-    const pollInbox = async () => {
-      if (requestInFlight) {
-        return
-      }
-
-      requestInFlight = true
-
-      try {
-        const inboxMessages = await getMailboxFolder({
-          email,
-          folder: 'inbox',
-          token: localStorage.getItem(AUTH_TOKEN_KEY),
-        })
-
-        if (!cancelled) {
-          dispatch({
-            type: 'inbox/pollSucceeded',
-            messages: inboxMessages,
-          })
-        }
-      } catch {
-        // Keep the last successful Inbox data visible during a transient poll failure.
-      } finally {
-        requestInFlight = false
-      }
-    }
-
-    const pollTimer = window.setInterval(
-      pollInbox,
-      MAILBOX_POLL_INTERVAL_MS,
-    )
-
-    return () => {
-      cancelled = true
-      window.clearInterval(pollTimer)
-    }
-  }, [email])
+  useInboxPolling({
+    email,
+    onMessages: handleInboxPoll,
+  })
 
   const openFolder = (folder) => {
     dispatch({ type: 'folder/opened', folder })
@@ -1086,10 +1046,9 @@ function MailboxScreen({ email, onLogout }) {
     }
 
     try {
-      await markMailAsRead({
+      await markMessageAsRead({
         message,
         recipientEmail: email,
-        token: localStorage.getItem(AUTH_TOKEN_KEY),
       })
       dispatch({
         type: 'message/readSucceeded',
@@ -1114,11 +1073,10 @@ function MailboxScreen({ email, onLogout }) {
     })
 
     try {
-      await deleteMail({
+      await removeMessage({
         email,
         folder,
         messageId: message.id,
-        token: localStorage.getItem(AUTH_TOKEN_KEY),
       })
       dispatch({
         type: 'message/deleteSucceeded',
@@ -1340,6 +1298,7 @@ function getInitialAuthState() {
 }
 
 function App() {
+  const { endSession } = useAuthApi()
   const [initialAuthState] = useState(getInitialAuthState)
   const [screen, setScreen] = useState(initialAuthState.screen)
   const [authenticatedEmail, setAuthenticatedEmail] = useState(
@@ -1356,9 +1315,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
-      if (auth) {
-        await signOut(auth)
-      }
+      await endSession()
     } finally {
       localStorage.removeItem(AUTH_TOKEN_KEY)
       localStorage.removeItem(AUTH_EMAIL_KEY)
