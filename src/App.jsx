@@ -1,4 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useReducer,
+  useState,
+} from 'react'
 import {
   Alert,
   Badge,
@@ -25,8 +32,10 @@ import { auth, isFirebaseConfigured } from './firebase'
 import {
   getMailboxFolder,
   isMailDatabaseConfigured,
+  markMailAsRead,
   sendMail,
 } from './mailService'
+import { initialMailboxState, mailboxReducer } from './mailboxReducer'
 import './App.css'
 
 const RichTextEditor = lazy(() => import('./RichTextEditor'))
@@ -726,7 +735,14 @@ function ComposeMail({ senderEmail, onClose, onSent }) {
   )
 }
 
-function MailFolder({ folder, messages, loading, error, onRefresh }) {
+function MailFolder({
+  folder,
+  messages,
+  loading,
+  error,
+  onRefresh,
+  onOpenMessage,
+}) {
   const title = folder === 'inbox' ? 'Inbox' : 'Sent'
 
   return (
@@ -810,15 +826,37 @@ function MailFolder({ folder, messages, loading, error, onRefresh }) {
                   : `To: ${message.recipientEmail}`
 
               return (
-                <ListGroup.Item key={message.id} className="mail-list-item">
+                <ListGroup.Item
+                  key={message.id}
+                  className={`mail-list-item ${
+                    folder === 'inbox' && !message.read ? 'is-unread' : ''
+                  }`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open message: ${message.subject}`}
+                  onClick={() => onOpenMessage(message)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      onOpenMessage(message)
+                    }
+                  }}
+                >
                   <Form.Check
                     type="checkbox"
                     className="mail-row-selector"
                     aria-label={`Select message from ${correspondent}`}
+                    onClick={(event) => event.stopPropagation()}
                   />
                   <span
-                    className={`unread-dot ${message.read ? 'is-read' : ''}`}
-                    aria-label={message.read ? 'Read message' : 'Unread message'}
+                    className={`unread-dot ${
+                      folder !== 'inbox' || message.read ? 'is-read' : ''
+                    }`}
+                    aria-label={
+                      folder === 'inbox' && !message.read
+                        ? 'Unread message'
+                        : 'Read message'
+                    }
                   />
                   <strong className="mail-correspondent">{correspondent}</strong>
                   <Button
@@ -826,6 +864,7 @@ function MailFolder({ folder, messages, loading, error, onRefresh }) {
                     variant="link"
                     className="mail-star"
                     aria-label={`Star message: ${message.subject}`}
+                    onClick={(event) => event.stopPropagation()}
                   >
                     <i className="bi bi-star" aria-hidden="true" />
                   </Button>
@@ -847,15 +886,84 @@ function MailFolder({ folder, messages, loading, error, onRefresh }) {
   )
 }
 
+function MailMessageDetail({ folder, message, error, onBack }) {
+  const senderName = message.senderEmail.split('@')[0]
+  const avatarLetter = senderName.charAt(0).toUpperCase()
+
+  return (
+    <Card className="mail-detail-card border-0">
+      <Card.Header className="mail-detail-toolbar">
+        <Button
+          type="button"
+          variant="light"
+          className="mail-detail-back"
+          onClick={onBack}
+        >
+          <i className="bi bi-arrow-left me-2" aria-hidden="true" />
+          Back to {folder === 'inbox' ? 'Inbox' : 'Sent'}
+        </Button>
+        <ButtonGroup aria-label="Message actions">
+          <Button type="button" variant="light" disabled>
+            <i className="bi bi-archive me-2" aria-hidden="true" />
+            Archive
+          </Button>
+          <Button type="button" variant="light" disabled>
+            <i className="bi bi-trash3 me-2" aria-hidden="true" />
+            Delete
+          </Button>
+        </ButtonGroup>
+      </Card.Header>
+
+      {error && (
+        <Alert variant="danger" className="m-3 mb-0" role="alert">
+          {error}
+        </Alert>
+      )}
+
+      <Card.Body className="mail-detail-body">
+        <div className="mail-detail-subject">
+          <span>Message</span>
+          <h1>{message.subject}</h1>
+        </div>
+
+        <div className="mail-detail-sender">
+          <span className="mail-detail-avatar" aria-hidden="true">
+            {avatarLetter}
+          </span>
+          <div>
+            <strong>{message.senderEmail}</strong>
+            <span>
+              To {message.recipientEmail}
+            </span>
+          </div>
+          <time dateTime={new Date(message.createdAt).toISOString()}>
+            {formatMailDate(message.createdAt)}
+          </time>
+        </div>
+
+        <article className="mail-detail-message">{message.bodyText}</article>
+      </Card.Body>
+    </Card>
+  )
+}
+
 function MailboxScreen({ email, onLogout }) {
-  const [activeFolder, setActiveFolder] = useState('inbox')
-  const [isComposing, setIsComposing] = useState(false)
-  const [messages, setMessages] = useState([])
-  const [loadingMessages, setLoadingMessages] = useState(true)
-  const [mailError, setMailError] = useState('')
-  const [sentNotice, setSentNotice] = useState('')
-  const [refreshKey, setRefreshKey] = useState(0)
-  const [searchQuery, setSearchQuery] = useState('')
+  const [mailboxState, dispatch] = useReducer(
+    mailboxReducer,
+    initialMailboxState,
+  )
+  const {
+    activeFolder,
+    isComposing,
+    messages,
+    loadingMessages,
+    mailError,
+    sentNotice,
+    refreshKey,
+    searchQuery,
+    selectedMessage,
+    unreadCount,
+  } = mailboxState
 
   const loadFolder = useCallback(async () => {
     if (!['inbox', 'sent'].includes(activeFolder)) {
@@ -868,14 +976,18 @@ function MailboxScreen({ email, onLogout }) {
         folder: activeFolder,
         token: localStorage.getItem(AUTH_TOKEN_KEY),
       })
-      setMessages(folderMessages)
+      dispatch({
+        type: 'folder/loadSucceeded',
+        folder: activeFolder,
+        messages: folderMessages,
+      })
     } catch (error) {
-      setMessages([])
-      setMailError(
-        error.message || 'We could not load this folder. Please try again.',
-      )
-    } finally {
-      setLoadingMessages(false)
+      dispatch({
+        type: 'folder/loadFailed',
+        folder: activeFolder,
+        error:
+          error.message || 'We could not load this folder. Please try again.',
+      })
     }
   }, [activeFolder, email])
 
@@ -885,26 +997,40 @@ function MailboxScreen({ email, onLogout }) {
   }, [loadFolder, refreshKey])
 
   const openFolder = (folder) => {
-    setIsComposing(false)
-    setSentNotice('')
-    setLoadingMessages(true)
-    setMailError('')
-    setActiveFolder(folder)
+    dispatch({ type: 'folder/opened', folder })
   }
 
   const handleSent = (message) => {
-    setSentNotice(`Your message to ${message.recipientEmail} was sent.`)
-    setIsComposing(false)
-    setLoadingMessages(true)
-    setMailError('')
-    setActiveFolder('sent')
-    setRefreshKey((value) => value + 1)
+    dispatch({ type: 'message/sent', message })
   }
 
   const refreshFolder = () => {
-    setLoadingMessages(true)
-    setMailError('')
-    setRefreshKey((value) => value + 1)
+    dispatch({ type: 'folder/refreshed' })
+  }
+
+  const openMessage = async (message) => {
+    const shouldMarkRead = activeFolder === 'inbox' && !message.read
+    dispatch({ type: 'message/opened', message })
+
+    if (!shouldMarkRead) {
+      return
+    }
+
+    try {
+      await markMailAsRead({
+        message,
+        recipientEmail: email,
+        token: localStorage.getItem(AUTH_TOKEN_KEY),
+      })
+    } catch (error) {
+      dispatch({
+        type: 'message/readFailed',
+        messageId: message.id,
+        error:
+          error.message ||
+          'We could not save the read status. Please try again.',
+      })
+    }
   }
 
   const normalizedSearch = searchQuery.trim().toLowerCase()
@@ -931,7 +1057,12 @@ function MailboxScreen({ email, onLogout }) {
               placeholder="Search mail"
               aria-label="Search mail"
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(event) =>
+                dispatch({
+                  type: 'search/changed',
+                  query: event.target.value,
+                })
+              }
             />
           </Form>
           <Stack direction="horizontal" gap={3}>
@@ -950,10 +1081,7 @@ function MailboxScreen({ email, onLogout }) {
             variant="primary"
             size="lg"
             className="compose-button"
-            onClick={() => {
-              setSentNotice('')
-              setIsComposing(true)
-            }}
+            onClick={() => dispatch({ type: 'composer/opened' })}
           >
             <i className="bi bi-pencil-square" aria-hidden="true" />
             Compose
@@ -967,6 +1095,15 @@ function MailboxScreen({ email, onLogout }) {
             >
               <i className="bi bi-inbox" aria-hidden="true" />
               Inbox
+              <Badge
+                pill
+                bg="primary"
+                className="folder-count"
+                data-testid="inbox-unread-count"
+                aria-label={`${unreadCount} unread messages`}
+              >
+                {unreadCount}
+              </Badge>
             </Nav.Link>
             <Nav.Link
               as="button"
@@ -992,7 +1129,7 @@ function MailboxScreen({ email, onLogout }) {
             <Alert
               variant="success"
               dismissible
-              onClose={() => setSentNotice('')}
+              onClose={() => dispatch({ type: 'notice/dismissed' })}
               className="mail-sent-alert"
             >
               <i className="bi bi-check-circle-fill me-2" aria-hidden="true" />
@@ -1003,8 +1140,15 @@ function MailboxScreen({ email, onLogout }) {
           {isComposing ? (
             <ComposeMail
               senderEmail={email}
-              onClose={() => setIsComposing(false)}
+              onClose={() => dispatch({ type: 'composer/closed' })}
               onSent={handleSent}
+            />
+          ) : selectedMessage ? (
+            <MailMessageDetail
+              folder={activeFolder}
+              message={selectedMessage}
+              error={mailError}
+              onBack={() => dispatch({ type: 'message/closed' })}
             />
           ) : activeFolder === 'welcome' ? (
             <Card className="welcome-card border-0">
@@ -1025,7 +1169,7 @@ function MailboxScreen({ email, onLogout }) {
                   variant="primary"
                   size="lg"
                   className="welcome-compose-button rounded-pill"
-                  onClick={() => setIsComposing(true)}
+                  onClick={() => dispatch({ type: 'composer/opened' })}
                 >
                   <i className="bi bi-pencil-square me-2" aria-hidden="true" />
                   Compose your first mail
@@ -1071,6 +1215,7 @@ function MailboxScreen({ email, onLogout }) {
               loading={loadingMessages}
               error={mailError}
               onRefresh={refreshFolder}
+              onOpenMessage={openMessage}
             />
           )}
         </section>

@@ -94,4 +94,33 @@ describe('Firebase mail service', () => {
       }),
     ).rejects.toThrow('Permission denied')
   })
+
+  it('persists read status in the recipient inbox', async () => {
+    fetch.mockResolvedValueOnce(jsonResponse(null))
+    const { mailboxKeyForEmail, markMailAsRead } = await import('./mailService')
+    const message = {
+      id: 'mail-123',
+      senderEmail: 'sender@example.com',
+      recipientEmail: 'receiver@example.com',
+      read: false,
+    }
+
+    await expect(
+      markMailAsRead({
+        message,
+        recipientEmail: 'receiver@example.com',
+        token: 'id-token',
+      }),
+    ).resolves.toEqual(expect.objectContaining({ id: 'mail-123', read: true }))
+
+    const requestOptions = fetch.mock.calls[0][1]
+    const requestBody = JSON.parse(requestOptions.body)
+    const receiverKey = mailboxKeyForEmail('receiver@example.com')
+
+    expect(fetch).toHaveBeenCalledWith(
+      `https://postly-demo-default-rtdb.firebaseio.com/mailboxes/${receiverKey}/inbox/mail-123.json?auth=id-token`,
+      expect.objectContaining({ method: 'PATCH' }),
+    )
+    expect(requestBody).toEqual({ read: true })
+  })
 })

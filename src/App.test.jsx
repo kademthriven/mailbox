@@ -6,7 +6,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
-import { getMailboxFolder, sendMail } from './mailService'
+import { getMailboxFolder, markMailAsRead, sendMail } from './mailService'
 import App, { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY } from './App'
 
 vi.mock('firebase/auth', () => ({
@@ -23,6 +23,7 @@ vi.mock('./firebase', () => ({
 vi.mock('./mailService', () => ({
   getMailboxFolder: vi.fn(),
   isMailDatabaseConfigured: true,
+  markMailAsRead: vi.fn(),
   sendMail: vi.fn(),
 }))
 
@@ -430,6 +431,7 @@ describe('Inbox component', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    markMailAsRead.mockResolvedValue({})
   })
 
   afterEach(() => {
@@ -526,5 +528,109 @@ describe('Inbox component', () => {
       await screen.findByText('Newly received message'),
     ).toBeInTheDocument()
     expect(getMailboxFolder).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a blue unread marker per new mail and the total in the sidebar', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      inboxMessage(),
+      inboxMessage({ id: 'inbox-message-2', subject: 'Second unread mail' }),
+      inboxMessage({
+        id: 'inbox-message-3',
+        subject: 'Previously read mail',
+        read: true,
+      }),
+    ])
+
+    renderInbox()
+
+    expect(await screen.findByText('Second unread mail')).toBeInTheDocument()
+    expect(screen.getAllByLabelText('Unread message')).toHaveLength(2)
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('2')
+    expect(screen.getByTestId('inbox-unread-count')).toHaveAccessibleName(
+      '2 unread messages',
+    )
+  })
+
+  it('opens the complete message and persists its read status in Firebase', async () => {
+    const message = inboxMessage({
+      bodyText:
+        'This is the complete first line.\nThis second line must also be visible.',
+    })
+    getMailboxFolder.mockResolvedValueOnce([message])
+    const user = renderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Inbox test message',
+      }),
+    )
+
+    expect(
+      screen.getByRole('heading', { name: 'Inbox test message' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'This is the complete first line. This second line must also be visible.',
+      ),
+    ).toBeInTheDocument()
+    expect(markMailAsRead).toHaveBeenCalledWith({
+      message,
+      recipientEmail: 'receiver@example.com',
+      token: 'firebase-id-token',
+    })
+  })
+
+  it('removes the unread marker and decreases the count after opening mail', async () => {
+    getMailboxFolder.mockResolvedValueOnce([inboxMessage()])
+    const user = renderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Inbox test message',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Back to Inbox' }))
+
+    expect(screen.queryByLabelText('Unread message')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Read message')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('0')
+  })
+
+  it('does not update Firebase again when an already-read message is opened', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      inboxMessage({ read: true, subject: 'Already read' }),
+    ])
+    const user = renderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Already read',
+      }),
+    )
+
+    expect(markMailAsRead).not.toHaveBeenCalled()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('0')
+  })
+
+  it('restores unread state and alerts the user when saving read status fails', async () => {
+    getMailboxFolder.mockResolvedValueOnce([inboxMessage()])
+    markMailAsRead.mockRejectedValueOnce(
+      new Error('Firebase could not save the read status.'),
+    )
+    const user = renderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Inbox test message',
+      }),
+    )
+
+    expect(
+      await screen.findByText('Firebase could not save the read status.'),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+
+    await user.click(screen.getByRole('button', { name: 'Back to Inbox' }))
+    expect(screen.getByLabelText('Unread message')).toBeInTheDocument()
   })
 })

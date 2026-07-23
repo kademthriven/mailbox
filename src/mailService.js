@@ -110,3 +110,22 @@ export const getMailboxFolder = async ({ email, folder, token }) => {
     return second.createdAt - first.createdAt
   })
 }
+
+export const markMailAsRead = async ({ message, recipientEmail, token }) => {
+  if (!message?.id) {
+    throw new Error('A message ID is required to mark mail as read.')
+  }
+
+  const recipientKey = mailboxKeyForEmail(recipientEmail)
+  const response = await fetch(
+    firebaseUrl(`mailboxes/${recipientKey}/inbox/${message.id}`, token),
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ read: true }),
+    },
+  )
+  await parseResponse(response)
+
+  return { ...message, read: true }
+}

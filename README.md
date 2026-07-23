@@ -44,8 +44,12 @@ mail without downloading unrelated users' messages.
 
 The Inbox performs a Firebase REST `GET` for the signed-in email's mailbox key
 as soon as authentication succeeds. Messages are shown newest-first with sender,
-subject, body preview, and timestamp. Users can search the loaded messages,
-refresh from Firebase, or open the existing rich-text editor with **Compose**.
+subject, body preview, timestamp, and a blue unread marker. Mailbox API data is
+kept in a reducer so the list, selected message, and sidebar unread total stay in
+sync. Opening a message shows its complete content and immediately updates its
+Inbox copy to `read: true` through Firebase REST, so it remains read after a page
+refresh. Users can also search the loaded messages, refresh from Firebase, or
+open the existing rich-text editor with **Compose**.
 
 ## Tests
 
