@@ -406,3 +406,125 @@ describe('Compose mail component', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('Inbox component', () => {
+  const inboxMessage = (overrides = {}) => ({
+    id: 'inbox-message-1',
+    senderEmail: 'friend@example.com',
+    recipientEmail: 'receiver@example.com',
+    subject: 'Inbox test message',
+    bodyText: 'This message came from Firebase.',
+    createdAt: Date.now(),
+    read: false,
+    ...overrides,
+  })
+
+  const renderInbox = () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'firebase-id-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'receiver@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+    return user
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('gets and displays mail sent to the authenticated user', async () => {
+    getMailboxFolder.mockResolvedValueOnce([inboxMessage()])
+
+    renderInbox()
+
+    expect(
+      await screen.findByText('Inbox test message'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('friend@example.com')).toBeInTheDocument()
+    expect(screen.getByText('This message came from Firebase.')).toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenCalledWith({
+      email: 'receiver@example.com',
+      folder: 'inbox',
+      token: 'firebase-id-token',
+    })
+  })
+
+  it('shows a loading state while the Firebase GET is pending', async () => {
+    getMailboxFolder.mockReturnValueOnce(new Promise(() => {}))
+
+    renderInbox()
+
+    expect(
+      await screen.findByText('Loading your messages…'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows an empty inbox when Firebase returns no messages', async () => {
+    getMailboxFolder.mockResolvedValueOnce([])
+
+    renderInbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Messages sent to this email address will appear here.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows a user-facing error when the inbox GET fails', async () => {
+    getMailboxFolder.mockRejectedValueOnce(
+      new Error('Firebase inbox is unavailable.'),
+    )
+
+    renderInbox()
+
+    expect(
+      await screen.findByText('Firebase inbox is unavailable.'),
+    ).toBeInTheDocument()
+  })
+
+  it('filters received messages using the mailbox search field', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      inboxMessage(),
+      inboxMessage({
+        id: 'inbox-message-2',
+        senderEmail: 'team@example.com',
+        subject: 'Quarterly planning',
+        bodyText: 'Please review the planning notes.',
+      }),
+    ])
+    const user = renderInbox()
+
+    expect(await screen.findByText('Inbox test message')).toBeInTheDocument()
+    expect(screen.getByText('Quarterly planning')).toBeInTheDocument()
+
+    await user.type(screen.getByLabelText('Search mail'), 'quarterly')
+
+    expect(screen.queryByText('Inbox test message')).not.toBeInTheDocument()
+    expect(screen.getByText('Quarterly planning')).toBeInTheDocument()
+  })
+
+  it('refreshes the inbox with a new Firebase GET request', async () => {
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        inboxMessage({ subject: 'Newly received message' }),
+      ])
+    const user = renderInbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Refresh Inbox' }))
+
+    expect(
+      await screen.findByText('Newly received message'),
+    ).toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenCalledTimes(2)
+  })
+})
