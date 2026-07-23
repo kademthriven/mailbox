@@ -905,4 +905,44 @@ describe('Delete mail component', () => {
       token: 'delete-token',
     })
   })
+
+  it('disables the row delete button while Firebase deletion is pending', async () => {
+    getMailboxFolder.mockResolvedValueOnce([mailboxMessage()])
+    deleteMail.mockReturnValueOnce(new Promise(() => {}))
+    const user = renderMailbox()
+    const deleteButton = await screen.findByRole('button', {
+      name: 'Delete message: Delete this message',
+    })
+
+    await user.click(deleteButton)
+
+    expect(deleteButton).toBeDisabled()
+    expect(screen.getByText('Delete this message')).toBeInTheDocument()
+    expect(deleteMail).toHaveBeenCalledOnce()
+  })
+
+  it('does not reduce the unread total when deleting a read message', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      mailboxMessage({
+        id: 'unread-message',
+        subject: 'Keep unread message',
+      }),
+      mailboxMessage({ read: true }),
+    ])
+    const user = renderMailbox()
+
+    expect(await screen.findByText('Keep unread message')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Delete message: Delete this message',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByText('Delete this message')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+    expect(screen.getAllByLabelText('Unread message')).toHaveLength(1)
+  })
 })
