@@ -27,6 +27,7 @@ export function mailboxReducer(state, action) {
         loadingMessages: true,
         mailError: '',
         deletingMessageIds: [],
+        refreshKey: state.refreshKey + 1,
       }
 
     case 'folder/loadSucceeded':

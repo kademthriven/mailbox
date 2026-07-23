@@ -82,6 +82,40 @@ describe('Firebase mail service', () => {
     expect(messages.map((message) => message.id)).toEqual(['newer', 'older'])
   })
 
+  it('retrieves sent mail from the authenticated sender mailbox', async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse({
+        sent: {
+          id: 'sent',
+          senderEmail: 'person@example.com',
+          recipientEmail: 'recipient@example.com',
+          createdAt: 20,
+        },
+      }),
+    )
+    const { getMailboxFolder, mailboxKeyForEmail } = await import(
+      './mailService'
+    )
+
+    const messages = await getMailboxFolder({
+      email: 'person@example.com',
+      folder: 'sent',
+      token: 'id-token',
+    })
+
+    expect(fetch).toHaveBeenCalledWith(
+      `https://postly-demo-default-rtdb.firebaseio.com/mailboxes/${mailboxKeyForEmail(
+        'person@example.com',
+      )}/sent.json?auth=id-token`,
+    )
+    expect(messages).toEqual([
+      expect.objectContaining({
+        id: 'sent',
+        recipientEmail: 'recipient@example.com',
+      }),
+    ])
+  })
+
   it('surfaces Firebase REST errors to the user interface', async () => {
     fetch.mockResolvedValueOnce(jsonResponse({ error: 'Permission denied' }, 401))
     const { getMailboxFolder } = await import('./mailService')

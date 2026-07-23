@@ -42,6 +42,11 @@ Email addresses are normalized and converted to URL-safe mailbox keys. This
 structure lets recipients retrieve their inbox and senders retrieve their sent
 mail without downloading unrelated users' messages.
 
+Selecting **Sent** performs a fresh Firebase REST `GET` for the authenticated
+sender's `sent` mailbox. It reuses the Inbox list for recipient, subject,
+preview, timestamp, and delete controls, and reuses the same full-message reader
+when an outgoing message is opened.
+
 The Inbox performs a Firebase REST `GET` for the signed-in email's mailbox key
 as soon as authentication succeeds. Messages are shown newest-first with sender,
 subject, body preview, timestamp, and a blue unread marker. Mailbox API data is

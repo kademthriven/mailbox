@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   createUserWithEmailAndPassword,
@@ -944,5 +950,164 @@ describe('Delete mail component', () => {
     )
     expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
     expect(screen.getAllByLabelText('Unread message')).toHaveLength(1)
+  })
+})
+
+describe('Sent box component', () => {
+  const sentMessage = (overrides = {}) => ({
+    id: 'sent-message-1',
+    senderEmail: 'sender@example.com',
+    recipientEmail: 'recipient@example.com',
+    subject: 'Sent project update',
+    bodyText: 'This is the complete outgoing message.',
+    createdAt: Date.now(),
+    read: false,
+    ...overrides,
+  })
+
+  const renderSentBox = async (sentMessages = [sentMessage()]) => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'sent-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'sender@example.com')
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(sentMessages)
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+
+    return user
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    markMailAsRead.mockResolvedValue({})
+    deleteMail.mockResolvedValue('sent-message-1')
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('loads and displays outgoing mail when Sent is clicked', async () => {
+    await renderSentBox()
+
+    expect(
+      await screen.findByRole('heading', { name: 'Sent' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('To: recipient@example.com')).toBeInTheDocument()
+    expect(screen.getByText('Sent project update')).toBeInTheDocument()
+    expect(
+      screen.getByText('This is the complete outgoing message.'),
+    ).toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenLastCalledWith({
+      email: 'sender@example.com',
+      folder: 'sent',
+      token: 'sent-token',
+    })
+  })
+
+  it('opens a sent message in the shared complete-message reader', async () => {
+    const user = await renderSentBox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Sent project update',
+      }),
+    )
+
+    expect(
+      screen.getByRole('heading', { name: 'Sent project update' }),
+    ).toBeInTheDocument()
+    const senderDetails = document.querySelector('.mail-detail-sender')
+    expect(senderDetails).not.toBeNull()
+    expect(
+      within(senderDetails).getByText('sender@example.com'),
+    ).toBeInTheDocument()
+    expect(
+      within(senderDetails).getByText('To recipient@example.com'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('This is the complete outgoing message.'),
+    ).toBeInTheDocument()
+    expect(markMailAsRead).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Back to Sent' }))
+    expect(screen.getByRole('heading', { name: 'Sent' })).toBeInTheDocument()
+  })
+
+  it('refreshes Sent from Firebase when the active Sent button is clicked again', async () => {
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([sentMessage()])
+      .mockResolvedValueOnce([
+        sentMessage({
+          id: 'sent-message-2',
+          subject: 'Newest sent message',
+        }),
+      ])
+    localStorage.setItem(AUTH_TOKEN_KEY, 'sent-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'sender@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+    expect(await screen.findByText('Sent project update')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+
+    expect(await screen.findByText('Newest sent message')).toBeInTheDocument()
+    expect(screen.queryByText('Sent project update')).not.toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenCalledTimes(3)
+  })
+
+  it('refreshes the Sent list with its refresh control', async () => {
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([sentMessage()])
+      .mockResolvedValueOnce([
+        sentMessage({
+          id: 'sent-message-2',
+          subject: 'Refreshed sent message',
+        }),
+      ])
+    localStorage.setItem(AUTH_TOKEN_KEY, 'sent-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'sender@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+    expect(await screen.findByText('Sent project update')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refresh Sent' }))
+
+    expect(await screen.findByText('Refreshed sent message')).toBeInTheDocument()
+    expect(getMailboxFolder).toHaveBeenLastCalledWith({
+      email: 'sender@example.com',
+      folder: 'sent',
+      token: 'sent-token',
+    })
+  })
+
+  it('shows a Firebase error without falling back to Inbox data', async () => {
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Sent mail is unavailable.'))
+    localStorage.setItem(AUTH_TOKEN_KEY, 'sent-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'sender@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+
+    expect(
+      await screen.findByText('Sent mail is unavailable.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Sent' })).toBeInTheDocument()
   })
 })
