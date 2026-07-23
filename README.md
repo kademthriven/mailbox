@@ -13,14 +13,23 @@ authentication.
    Email/Password**.
 5. Start the app with `npm run dev`.
 
-The form requires email, password, and password confirmation. It prevents
-submission until the fields are complete and the passwords match, translates
-common Firebase errors into user-friendly messages, and logs
+The signup form requires email, password, and password confirmation. It
+prevents submission until the fields are complete and the passwords match,
+translates common Firebase errors into user-friendly messages, and logs
 `User has successfully signed up.` after successful account creation.
+
+Existing users can open the login screen and authenticate with their Firebase
+email/password credentials. After successful login, the app:
+
+- retrieves the Firebase ID token;
+- stores it in local storage under `postlyAuthToken`;
+- shows the authenticated “Welcome to your mail box” screen;
+- restores that screen while the stored token is present; and
+- removes the stored token and email when the user logs out.
 
 ## Tests
 
-Run the signup component test suite once with:
+Run the authentication component test suite once with:
 
 ```bash
 npm run test:run

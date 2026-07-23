@@ -1,11 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createUserWithEmailAndPassword } from 'firebase/auth'
-import App from './App'
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+} from 'firebase/auth'
+import App, { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY } from './App'
 
 vi.mock('firebase/auth', () => ({
   createUserWithEmailAndPassword: vi.fn(),
+  signInWithEmailAndPassword: vi.fn(),
+  signOut: vi.fn(),
 }))
 
 vi.mock('./firebase', () => ({
@@ -30,6 +36,7 @@ const fillSignupForm = async ({
 describe('Signup component', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   afterEach(() => {
@@ -136,5 +143,117 @@ describe('Signup component', () => {
     expect(screen.getByLabelText('Email address')).toHaveClass('is-invalid')
     expect(screen.getByText('Enter a valid email address.')).toBeInTheDocument()
     expect(createUserWithEmailAndPassword).not.toHaveBeenCalled()
+  })
+})
+
+describe('Login component', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  const openLogin = async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    return user
+  }
+
+  const fillLoginForm = async (user) => {
+    await user.type(screen.getByLabelText('Email address'), 'person@example.com')
+    await user.type(screen.getByLabelText('Password'), 'secret123')
+  }
+
+  it('renders the required email and password login fields', async () => {
+    await openLogin()
+
+    expect(screen.getByLabelText('Email address')).toBeRequired()
+    expect(screen.getByLabelText('Password')).toBeRequired()
+    expect(
+      screen.getByRole('button', { name: /sign in to postly/i }),
+    ).toBeDisabled()
+  })
+
+  it('alerts the user when Firebase rejects the credentials', async () => {
+    signInWithEmailAndPassword.mockRejectedValueOnce({
+      code: 'auth/invalid-credential',
+    })
+    const user = await openLogin()
+    await fillLoginForm(user)
+
+    await user.click(
+      screen.getByRole('button', { name: /sign in to postly/i }),
+    )
+
+    expect(
+      await screen.findByText(
+        'The email or password you entered is incorrect. Please try again.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('stores the Firebase token and displays the mailbox welcome screen', async () => {
+    const getIdToken = vi.fn().mockResolvedValue('firebase-id-token')
+    signInWithEmailAndPassword.mockResolvedValueOnce({
+      user: {
+        email: 'person@example.com',
+        getIdToken,
+      },
+    })
+    const user = await openLogin()
+    await fillLoginForm(user)
+
+    await user.click(
+      screen.getByRole('button', { name: /sign in to postly/i }),
+    )
+
+    expect(signInWithEmailAndPassword).toHaveBeenCalledWith(
+      { name: 'test-auth' },
+      'person@example.com',
+      'secret123',
+    )
+    expect(getIdToken).toHaveBeenCalledOnce()
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBe('firebase-id-token')
+    expect(localStorage.getItem(AUTH_EMAIL_KEY)).toBe('person@example.com')
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Welcome to your mail box',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('restores the welcome screen when a stored token is present', () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'persisted-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'returning@example.com')
+
+    render(<App />)
+
+    expect(
+      screen.getByRole('heading', { name: 'Welcome to your mail box' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('returning@example.com')).toBeInTheDocument()
+  })
+
+  it('clears the stored token and returns to login on logout', async () => {
+    signOut.mockResolvedValueOnce()
+    localStorage.setItem(AUTH_TOKEN_KEY, 'persisted-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'returning@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /log out/i }))
+
+    expect(signOut).toHaveBeenCalledWith({ name: 'test-auth' })
+    expect(localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull()
+    expect(localStorage.getItem(AUTH_EMAIL_KEY)).toBeNull()
+    expect(
+      screen.getByRole('heading', { name: 'Sign in to Postly' }),
+    ).toBeInTheDocument()
   })
 })
