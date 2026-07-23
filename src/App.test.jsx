@@ -6,7 +6,12 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
-import { getMailboxFolder, markMailAsRead, sendMail } from './mailService'
+import {
+  deleteMail,
+  getMailboxFolder,
+  markMailAsRead,
+  sendMail,
+} from './mailService'
 import App, { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY } from './App'
 
 vi.mock('firebase/auth', () => ({
@@ -21,6 +26,7 @@ vi.mock('./firebase', () => ({
 }))
 
 vi.mock('./mailService', () => ({
+  deleteMail: vi.fn(),
   getMailboxFolder: vi.fn(),
   isMailDatabaseConfigured: true,
   markMailAsRead: vi.fn(),
@@ -784,5 +790,119 @@ describe('Reading message component', () => {
       screen.getByRole('heading', { name: 'A complete message' }),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Back to Inbox' })).toBeVisible()
+  })
+})
+
+describe('Delete mail component', () => {
+  const mailboxMessage = (overrides = {}) => ({
+    id: 'delete-message-1',
+    senderEmail: 'sender@example.com',
+    recipientEmail: 'owner@example.com',
+    subject: 'Delete this message',
+    bodyText: 'This message can be removed.',
+    createdAt: Date.now(),
+    read: false,
+    ...overrides,
+  })
+
+  const renderMailbox = () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'delete-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'owner@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+    return user
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    deleteMail.mockResolvedValue('delete-message-1')
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('deletes an inbox message and removes it from the visible list', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      mailboxMessage(),
+      mailboxMessage({
+        id: 'keep-message',
+        subject: 'Keep this message',
+      }),
+    ])
+    const user = renderMailbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Delete message: Delete this message',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByText('Delete this message')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText('Keep this message')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('1')
+    expect(deleteMail).toHaveBeenCalledWith({
+      email: 'owner@example.com',
+      folder: 'inbox',
+      messageId: 'delete-message-1',
+      token: 'delete-token',
+    })
+    expect(markMailAsRead).not.toHaveBeenCalled()
+  })
+
+  it('keeps the message visible and shows an error when deletion fails', async () => {
+    getMailboxFolder.mockResolvedValueOnce([mailboxMessage()])
+    deleteMail.mockRejectedValueOnce(new Error('Firebase deletion failed.'))
+    const user = renderMailbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Delete message: Delete this message',
+      }),
+    )
+
+    expect(
+      await screen.findByText('Firebase deletion failed.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Delete this message')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Delete message: Delete this message',
+      }),
+    ).toBeEnabled()
+  })
+
+  it('deletes only the authenticated user sent-mail copy from Sent', async () => {
+    getMailboxFolder
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        mailboxMessage({
+          recipientEmail: 'recipient@example.com',
+          read: true,
+        }),
+      ])
+    const user = renderMailbox()
+
+    expect(await screen.findByText('No messages here yet')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Sent' }))
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Delete message: Delete this message',
+      }),
+    )
+
+    expect(
+      await screen.findByText('No messages here yet'),
+    ).toBeInTheDocument()
+    expect(deleteMail).toHaveBeenCalledWith({
+      email: 'owner@example.com',
+      folder: 'sent',
+      messageId: 'delete-message-1',
+      token: 'delete-token',
+    })
   })
 })

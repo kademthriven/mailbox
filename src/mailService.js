@@ -129,3 +129,22 @@ export const markMailAsRead = async ({ message, recipientEmail, token }) => {
 
   return { ...message, read: true }
 }
+
+export const deleteMail = async ({ email, folder, messageId, token }) => {
+  if (!['inbox', 'sent'].includes(folder)) {
+    throw new Error('Unknown mailbox folder.')
+  }
+
+  if (!messageId) {
+    throw new Error('A message ID is required to delete mail.')
+  }
+
+  const mailboxKey = mailboxKeyForEmail(email)
+  const response = await fetch(
+    firebaseUrl(`mailboxes/${mailboxKey}/${folder}/${messageId}`, token),
+    { method: 'DELETE' },
+  )
+  await parseResponse(response)
+
+  return messageId
+}

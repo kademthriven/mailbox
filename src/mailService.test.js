@@ -156,4 +156,55 @@ describe('Firebase mail service', () => {
       }),
     ).rejects.toThrow('Read update was denied')
   })
+
+  it('deletes a message from the requested mailbox folder', async () => {
+    fetch.mockResolvedValueOnce(jsonResponse(null))
+    const { deleteMail, mailboxKeyForEmail } = await import('./mailService')
+
+    await expect(
+      deleteMail({
+        email: 'owner@example.com',
+        folder: 'inbox',
+        messageId: 'mail-123',
+        token: 'id-token',
+      }),
+    ).resolves.toBe('mail-123')
+
+    expect(fetch).toHaveBeenCalledWith(
+      `https://postly-demo-default-rtdb.firebaseio.com/mailboxes/${mailboxKeyForEmail(
+        'owner@example.com',
+      )}/inbox/mail-123.json?auth=id-token`,
+      { method: 'DELETE' },
+    )
+  })
+
+  it('rejects deletion from an unknown mailbox folder', async () => {
+    const { deleteMail } = await import('./mailService')
+
+    await expect(
+      deleteMail({
+        email: 'owner@example.com',
+        folder: 'archive',
+        messageId: 'mail-123',
+        token: 'id-token',
+      }),
+    ).rejects.toThrow('Unknown mailbox folder.')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('surfaces Firebase errors while deleting a message', async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse({ error: 'Delete permission denied' }, 403),
+    )
+    const { deleteMail } = await import('./mailService')
+
+    await expect(
+      deleteMail({
+        email: 'owner@example.com',
+        folder: 'sent',
+        messageId: 'mail-123',
+        token: 'id-token',
+      }),
+    ).rejects.toThrow('Delete permission denied')
+  })
 })

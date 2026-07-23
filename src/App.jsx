@@ -30,6 +30,7 @@ import {
 } from 'firebase/auth'
 import { auth, isFirebaseConfigured } from './firebase'
 import {
+  deleteMail,
   getMailboxFolder,
   isMailDatabaseConfigured,
   markMailAsRead,
@@ -742,6 +743,8 @@ function MailFolder({
   error,
   onRefresh,
   onOpenMessage,
+  onDeleteMessage,
+  deletingMessageIds,
 }) {
   const title = folder === 'inbox' ? 'Inbox' : 'Sent'
 
@@ -876,6 +879,28 @@ function MailFolder({
                   <time dateTime={new Date(message.createdAt).toISOString()}>
                     {formatMailDate(message.createdAt)}
                   </time>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="mail-delete"
+                    aria-label={`Delete message: ${message.subject}`}
+                    title="Delete message"
+                    disabled={deletingMessageIds.includes(message.id)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onDeleteMessage(message)
+                    }}
+                  >
+                    {deletingMessageIds.includes(message.id) ? (
+                      <Spinner
+                        animation="border"
+                        size="sm"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <i className="bi bi-trash3" aria-hidden="true" />
+                    )}
+                  </Button>
                 </ListGroup.Item>
               )
             })}
@@ -963,6 +988,7 @@ function MailboxScreen({ email, onLogout }) {
     searchQuery,
     selectedMessage,
     unreadCount,
+    deletingMessageIds,
   } = mailboxState
 
   const loadFolder = useCallback(async () => {
@@ -1029,6 +1055,36 @@ function MailboxScreen({ email, onLogout }) {
         error:
           error.message ||
           'We could not save the read status. Please try again.',
+      })
+    }
+  }
+
+  const deleteMessage = async (message) => {
+    const folder = activeFolder
+    dispatch({
+      type: 'message/deleteStarted',
+      messageId: message.id,
+    })
+
+    try {
+      await deleteMail({
+        email,
+        folder,
+        messageId: message.id,
+        token: localStorage.getItem(AUTH_TOKEN_KEY),
+      })
+      dispatch({
+        type: 'message/deleteSucceeded',
+        folder,
+        messageId: message.id,
+      })
+    } catch (error) {
+      dispatch({
+        type: 'message/deleteFailed',
+        folder,
+        messageId: message.id,
+        error:
+          error.message || 'We could not delete this message. Please try again.',
       })
     }
   }
@@ -1216,6 +1272,8 @@ function MailboxScreen({ email, onLogout }) {
               error={mailError}
               onRefresh={refreshFolder}
               onOpenMessage={openMessage}
+              onDeleteMessage={deleteMessage}
+              deletingMessageIds={deletingMessageIds}
             />
           )}
         </section>

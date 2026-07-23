@@ -49,7 +49,10 @@ kept in a reducer so the list, selected message, and sidebar unread total stay i
 sync. Opening a message shows its complete content and immediately updates its
 Inbox copy to `read: true` through Firebase REST, so it remains read after a page
 refresh. Users can also search the loaded messages, refresh from Firebase, or
-open the existing rich-text editor with **Compose**.
+open the existing rich-text editor with **Compose**. Each mail row also has a
+delete action. Firebase removes only the signed-in user's copy from the current
+Inbox or Sent folder, then the reducer removes it from the visible list and
+updates the unread total.
 
 ## Tests
 

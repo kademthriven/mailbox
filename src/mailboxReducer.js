@@ -9,6 +9,7 @@ export const initialMailboxState = {
   searchQuery: '',
   selectedMessage: null,
   unreadCount: 0,
+  deletingMessageIds: [],
 }
 
 const countUnread = (messages) =>
@@ -25,6 +26,7 @@ export function mailboxReducer(state, action) {
         sentNotice: '',
         loadingMessages: true,
         mailError: '',
+        deletingMessageIds: [],
       }
 
     case 'folder/loadSucceeded':
@@ -136,6 +138,56 @@ export function mailboxReducer(state, action) {
 
     case 'message/closed':
       return { ...state, selectedMessage: null }
+
+    case 'message/deleteStarted':
+      return {
+        ...state,
+        deletingMessageIds: [
+          ...state.deletingMessageIds,
+          action.messageId,
+        ],
+        mailError: '',
+      }
+
+    case 'message/deleteSucceeded': {
+      const deletedMessage =
+        action.folder === state.activeFolder
+          ? state.messages.find((message) => message.id === action.messageId)
+          : null
+      const deletedUnreadMessage =
+        action.folder === 'inbox' && deletedMessage && !deletedMessage.read
+
+      return {
+        ...state,
+        messages:
+          action.folder === state.activeFolder
+            ? state.messages.filter(
+                (message) => message.id !== action.messageId,
+              )
+            : state.messages,
+        selectedMessage:
+          state.selectedMessage?.id === action.messageId
+            ? null
+            : state.selectedMessage,
+        unreadCount: deletedUnreadMessage
+          ? Math.max(0, state.unreadCount - 1)
+          : state.unreadCount,
+        deletingMessageIds: state.deletingMessageIds.filter(
+          (messageId) => messageId !== action.messageId,
+        ),
+        mailError: '',
+      }
+    }
+
+    case 'message/deleteFailed':
+      return {
+        ...state,
+        deletingMessageIds: state.deletingMessageIds.filter(
+          (messageId) => messageId !== action.messageId,
+        ),
+        mailError:
+          action.folder === state.activeFolder ? action.error : state.mailError,
+      }
 
     default:
       return state
