@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   createUserWithEmailAndPassword,
@@ -632,5 +632,157 @@ describe('Inbox component', () => {
 
     await user.click(screen.getByRole('button', { name: 'Back to Inbox' }))
     expect(screen.getByLabelText('Unread message')).toBeInTheDocument()
+  })
+
+  it('does not show a blue dot when every inbox message is already read', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      inboxMessage({ read: true }),
+      inboxMessage({
+        id: 'inbox-message-2',
+        subject: 'Another read message',
+        read: true,
+      }),
+    ])
+
+    renderInbox()
+
+    expect(await screen.findByText('Another read message')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Unread message')).not.toBeInTheDocument()
+    expect(screen.getAllByLabelText('Read message')).toHaveLength(2)
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('0')
+  })
+
+  it('keeps the total unread count when search hides unread rows', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      inboxMessage(),
+      inboxMessage({
+        id: 'inbox-message-2',
+        senderEmail: 'updates@example.com',
+        subject: 'Product update',
+      }),
+    ])
+    const user = renderInbox()
+
+    expect(await screen.findByText('Product update')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('Search mail'), 'product')
+
+    expect(screen.getAllByLabelText('Unread message')).toHaveLength(1)
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('2')
+  })
+
+  it('keeps the blue dot removed after refreshing mail marked read in Firebase', async () => {
+    const unreadMessage = inboxMessage()
+    getMailboxFolder
+      .mockResolvedValueOnce([unreadMessage])
+      .mockResolvedValueOnce([{ ...unreadMessage, read: true }])
+    const user = renderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: Inbox test message',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Back to Inbox' }))
+    await user.click(screen.getByRole('button', { name: 'Refresh Inbox' }))
+
+    await waitFor(() => expect(getMailboxFolder).toHaveBeenCalledTimes(2))
+    expect(
+      await screen.findByRole('button', {
+        name: 'Open message: Inbox test message',
+      }),
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText('Unread message')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Read message')).toBeInTheDocument()
+    expect(screen.getByTestId('inbox-unread-count')).toHaveTextContent('0')
+  })
+})
+
+describe('Reading message component', () => {
+  const message = (overrides = {}) => ({
+    id: 'reading-message-1',
+    senderEmail: 'author@example.com',
+    recipientEmail: 'reader@example.com',
+    subject: 'A complete message',
+    bodyText: 'First paragraph.\n\nSecond paragraph with the full conclusion.',
+    createdAt: Date.now(),
+    read: false,
+    ...overrides,
+  })
+
+  const renderReaderInbox = (mail = message()) => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'reading-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'reader@example.com')
+    getMailboxFolder.mockResolvedValueOnce([mail])
+    markMailAsRead.mockResolvedValue({})
+    const user = userEvent.setup()
+    const view = render(<App />)
+
+    return { mail, user, ...view }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('shows the complete subject, sender, recipient, and message body', async () => {
+    const { user } = renderReaderInbox()
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: A complete message',
+      }),
+    )
+
+    expect(
+      screen.getByRole('heading', { name: 'A complete message' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('author@example.com')).toBeInTheDocument()
+    expect(screen.getByText('To reader@example.com')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'First paragraph. Second paragraph with the full conclusion.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('returns to the inbox list when the back button is clicked', async () => {
+    const { user } = renderReaderInbox(message({ read: true }))
+
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Open message: A complete message',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Back to Inbox' }))
+
+    expect(
+      screen.getByRole('heading', { name: 'Inbox' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: 'Open message: A complete message',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('supports opening a message with the keyboard', async () => {
+    const { user } = renderReaderInbox(message({ read: true }))
+    const row = await screen.findByRole('button', {
+      name: 'Open message: A complete message',
+    })
+
+    row.focus()
+    await user.keyboard('{Enter}')
+
+    expect(
+      screen.getByRole('heading', { name: 'A complete message' }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to Inbox' })).toBeVisible()
   })
 })

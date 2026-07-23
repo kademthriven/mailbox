@@ -123,4 +123,37 @@ describe('Firebase mail service', () => {
     )
     expect(requestBody).toEqual({ read: true })
   })
+
+  it('rejects a mark-as-read request without a message ID', async () => {
+    const { markMailAsRead } = await import('./mailService')
+
+    await expect(
+      markMailAsRead({
+        message: { senderEmail: 'sender@example.com' },
+        recipientEmail: 'receiver@example.com',
+        token: 'id-token',
+      }),
+    ).rejects.toThrow('A message ID is required to mark mail as read.')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('surfaces Firebase errors while marking a message as read', async () => {
+    fetch.mockResolvedValueOnce(
+      jsonResponse({ error: 'Read update was denied' }, 403),
+    )
+    const { markMailAsRead } = await import('./mailService')
+
+    await expect(
+      markMailAsRead({
+        message: {
+          id: 'mail-123',
+          senderEmail: 'sender@example.com',
+          recipientEmail: 'receiver@example.com',
+          read: false,
+        },
+        recipientEmail: 'receiver@example.com',
+        token: 'id-token',
+      }),
+    ).rejects.toThrow('Read update was denied')
+  })
 })
