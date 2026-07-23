@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import {
   Alert,
   Badge,
@@ -8,6 +8,7 @@ import {
   Container,
   Form,
   InputGroup,
+  ListGroup,
   Nav,
   Navbar,
   Row,
@@ -20,7 +21,14 @@ import {
   signOut,
 } from 'firebase/auth'
 import { auth, isFirebaseConfigured } from './firebase'
+import {
+  getMailboxFolder,
+  isMailDatabaseConfigured,
+  sendMail,
+} from './mailService'
 import './App.css'
+
+const RichTextEditor = lazy(() => import('./RichTextEditor'))
 
 export const AUTH_TOKEN_KEY = 'postlyAuthToken'
 export const AUTH_EMAIL_KEY = 'postlyUserEmail'
@@ -550,12 +558,311 @@ function LoginCard({ onSignup, onAuthenticated }) {
   )
 }
 
+const formatMailDate = (timestamp) =>
+  new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(timestamp)
+
+function ComposeMail({ senderEmail, onClose, onSent }) {
+  const [recipientEmail, setRecipientEmail] = useState('')
+  const [subject, setSubject] = useState('')
+  const [messageBody, setMessageBody] = useState({
+    html: '',
+    text: '',
+    isEmpty: true,
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const recipientIsValid = isValidEmail(recipientEmail)
+  const canSend =
+    recipientIsValid &&
+    subject.trim() !== '' &&
+    !messageBody.isEmpty &&
+    !loading
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setError('')
+
+    if (!canSend) {
+      setError('Add a valid recipient, a subject, and a message before sending.')
+      return
+    }
+
+    setLoading(true)
+
+    try {
+      const message = await sendMail({
+        senderEmail,
+        recipientEmail,
+        subject,
+        bodyHtml: messageBody.html,
+        bodyText: messageBody.text,
+        token: localStorage.getItem(AUTH_TOKEN_KEY),
+      })
+      onSent(message)
+    } catch (mailError) {
+      setError(
+        mailError.message ||
+          'We could not send your message. Please try again.',
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card className="compose-card border-0">
+      <Card.Header className="compose-card-header">
+        <div>
+          <span className="compose-kicker">Compose</span>
+          <h1>New message</h1>
+        </div>
+        <Button
+          type="button"
+          variant="light"
+          className="compose-close"
+          aria-label="Close composer"
+          onClick={onClose}
+        >
+          <i className="bi bi-x-lg" aria-hidden="true" />
+        </Button>
+      </Card.Header>
+
+      <Form onSubmit={handleSubmit} className="compose-form">
+        {error && (
+          <Alert variant="danger" className="compose-alert" role="alert">
+            <i className="bi bi-exclamation-circle-fill" aria-hidden="true" />
+            <span>{error}</span>
+          </Alert>
+        )}
+
+        {!isMailDatabaseConfigured && (
+          <Alert variant="warning" className="compose-alert">
+            Add your Firebase Realtime Database URL to <code>.env</code> before
+            sending.
+          </Alert>
+        )}
+
+        <Form.Group className="compose-row" controlId="composeRecipient">
+          <Form.Label>To</Form.Label>
+          <div className="recipient-field">
+            <span className="recipient-avatar" aria-hidden="true">
+              <i className="bi bi-person-fill" />
+            </span>
+            <Form.Control
+              type="email"
+              placeholder="recipient@example.com"
+              value={recipientEmail}
+              onChange={(event) => setRecipientEmail(event.target.value)}
+              required
+              autoFocus
+              aria-label="Recipient email"
+            />
+          </div>
+          <span className="compose-copy-options">Cc / Bcc</span>
+        </Form.Group>
+
+        <Form.Group className="compose-row subject-row" controlId="composeSubject">
+          <Form.Label className="visually-hidden">Subject</Form.Label>
+          <Form.Control
+            type="text"
+            placeholder="Subject"
+            value={subject}
+            onChange={(event) => setSubject(event.target.value)}
+            required
+            aria-label="Subject"
+          />
+        </Form.Group>
+
+        <Suspense
+          fallback={
+            <div className="compose-editor-loading">Opening editor…</div>
+          }
+        >
+          <RichTextEditor onChange={setMessageBody} />
+        </Suspense>
+
+        <div className="compose-actions">
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            className="compose-send"
+            disabled={!canSend}
+          >
+            {loading ? (
+              <>
+                <Spinner size="sm" className="me-2" aria-hidden="true" />
+                Sending…
+              </>
+            ) : (
+              <>
+                Send
+                <i className="bi bi-send-fill ms-2" aria-hidden="true" />
+              </>
+            )}
+          </Button>
+          <span className="compose-from">
+            From <strong>{senderEmail}</strong>
+          </span>
+          <Button
+            type="button"
+            variant="link"
+            className="compose-discard"
+            aria-label="Discard draft"
+            onClick={onClose}
+          >
+            <i className="bi bi-trash3" aria-hidden="true" />
+          </Button>
+        </div>
+      </Form>
+    </Card>
+  )
+}
+
+function MailFolder({ folder, messages, loading, error }) {
+  const title = folder === 'inbox' ? 'Inbox' : 'Sent'
+
+  return (
+    <Card className="mail-list-card border-0">
+      <Card.Header>
+        <div>
+          <p>Your mail</p>
+          <h1>{title}</h1>
+        </div>
+        <Badge pill bg="light" text="primary">
+          {messages.length} {messages.length === 1 ? 'message' : 'messages'}
+        </Badge>
+      </Card.Header>
+
+      {error && (
+        <Alert variant="danger" className="m-3" role="alert">
+          {error}
+        </Alert>
+      )}
+
+      {loading ? (
+        <div className="mail-list-state">
+          <Spinner animation="border" variant="primary" />
+          <span>Loading your messages…</span>
+        </div>
+      ) : messages.length === 0 ? (
+        <div className="mail-list-state">
+          <span className="empty-mail-icon">
+            <i className={`bi ${folder === 'inbox' ? 'bi-inbox' : 'bi-send'}`} />
+          </span>
+          <h2>No messages here yet</h2>
+          <p>
+            {folder === 'inbox'
+              ? 'Messages sent to this email address will appear here.'
+              : 'Messages you send will be saved here.'}
+          </p>
+        </div>
+      ) : (
+        <ListGroup variant="flush" className="mail-list">
+          {messages.map((message) => (
+            <ListGroup.Item key={message.id} className="mail-list-item">
+              <div className="mail-avatar" aria-hidden="true">
+                {(folder === 'inbox'
+                  ? message.senderEmail
+                  : message.recipientEmail
+                )
+                  .charAt(0)
+                  .toUpperCase()}
+              </div>
+              <div className="mail-summary">
+                <div className="mail-summary-top">
+                  <strong>
+                    {folder === 'inbox'
+                      ? message.senderEmail
+                      : `To: ${message.recipientEmail}`}
+                  </strong>
+                  <time dateTime={new Date(message.createdAt).toISOString()}>
+                    {formatMailDate(message.createdAt)}
+                  </time>
+                </div>
+                <h2>{message.subject}</h2>
+                <p>{message.bodyText}</p>
+              </div>
+            </ListGroup.Item>
+          ))}
+        </ListGroup>
+      )}
+    </Card>
+  )
+}
+
 function MailboxScreen({ email, onLogout }) {
+  const [activeFolder, setActiveFolder] = useState('welcome')
+  const [isComposing, setIsComposing] = useState(false)
+  const [messages, setMessages] = useState([])
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [mailError, setMailError] = useState('')
+  const [sentNotice, setSentNotice] = useState('')
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const loadFolder = useCallback(async () => {
+    if (!['inbox', 'sent'].includes(activeFolder)) {
+      return
+    }
+
+    try {
+      const folderMessages = await getMailboxFolder({
+        email,
+        folder: activeFolder,
+        token: localStorage.getItem(AUTH_TOKEN_KEY),
+      })
+      setMessages(folderMessages)
+    } catch (error) {
+      setMessages([])
+      setMailError(
+        error.message || 'We could not load this folder. Please try again.',
+      )
+    } finally {
+      setLoadingMessages(false)
+    }
+  }, [activeFolder, email])
+
+  useEffect(() => {
+    const loadTimer = window.setTimeout(loadFolder, 0)
+    return () => window.clearTimeout(loadTimer)
+  }, [loadFolder, refreshKey])
+
+  const openFolder = (folder) => {
+    setIsComposing(false)
+    setSentNotice('')
+    setLoadingMessages(true)
+    setMailError('')
+    setActiveFolder(folder)
+  }
+
+  const handleSent = (message) => {
+    setSentNotice(`Your message to ${message.recipientEmail} was sent.`)
+    setIsComposing(false)
+    setLoadingMessages(true)
+    setMailError('')
+    setActiveFolder('sent')
+    setRefreshKey((value) => value + 1)
+  }
+
   return (
     <div className="mailbox-screen">
       <Navbar className="site-navbar mailbox-navbar">
-        <Container>
-          <Brand onClick={() => {}} />
+        <Container fluid className="px-lg-4">
+          <Brand onClick={() => openFolder('welcome')} />
+          <Form className="mailbox-search d-none d-md-flex" role="search">
+            <i className="bi bi-search" aria-hidden="true" />
+            <Form.Control
+              type="search"
+              placeholder="Search mail"
+              aria-label="Search mail"
+            />
+          </Form>
           <Stack direction="horizontal" gap={3}>
             <span className="signed-in-email d-none d-sm-inline">{email}</span>
             <Button variant="outline-primary" className="nav-signin" onClick={onLogout}>
@@ -566,54 +873,135 @@ function MailboxScreen({ email, onLogout }) {
         </Container>
       </Navbar>
 
-      <main className="mailbox-home">
-        <div className="mailbox-home-orb mailbox-home-orb-one" aria-hidden="true" />
-        <div className="mailbox-home-orb mailbox-home-orb-two" aria-hidden="true" />
-        <Container className="position-relative">
-          <Row className="justify-content-center">
-            <Col lg={9} xl={8}>
-              <Card className="welcome-card border-0">
-                <Card.Body>
-                  <div className="welcome-mail-icon" aria-hidden="true">
-                    <i className="bi bi-envelope-open-heart-fill" />
-                  </div>
-                  <Badge pill bg="light" text="primary" className="eyebrow">
-                    Login successful
-                  </Badge>
-                  <h1>Welcome to your mail box</h1>
-                  <p>
-                    Your Postly space is ready. This is a preview of the mailbox
-                    experience that will live here.
-                  </p>
+      <main className="mailbox-workspace">
+        <aside className="mailbox-sidebar">
+          <Button
+            variant="primary"
+            size="lg"
+            className="compose-button"
+            onClick={() => {
+              setSentNotice('')
+              setIsComposing(true)
+            }}
+          >
+            <i className="bi bi-pencil-square" aria-hidden="true" />
+            Compose
+          </Button>
 
-                  <Row className="g-3 welcome-stats">
-                    <Col sm={4}>
-                      <div className="welcome-stat">
-                        <i className="bi bi-inbox" />
-                        <strong>Inbox</strong>
-                        <span>All caught up</span>
-                      </div>
-                    </Col>
-                    <Col sm={4}>
-                      <div className="welcome-stat">
-                        <i className="bi bi-star" />
-                        <strong>Starred</strong>
-                        <span>Nothing saved yet</span>
-                      </div>
-                    </Col>
-                    <Col sm={4}>
-                      <div className="welcome-stat">
-                        <i className="bi bi-send" />
-                        <strong>Sent</strong>
-                        <span>Ready when you are</span>
-                      </div>
-                    </Col>
-                  </Row>
-                </Card.Body>
-              </Card>
-            </Col>
-          </Row>
-        </Container>
+          <Nav className="mailbox-folders flex-column">
+            <Nav.Link
+              as="button"
+              active={!isComposing && activeFolder === 'inbox'}
+              onClick={() => openFolder('inbox')}
+            >
+              <i className="bi bi-inbox" aria-hidden="true" />
+              Inbox
+            </Nav.Link>
+            <Nav.Link
+              as="button"
+              active={!isComposing && activeFolder === 'sent'}
+              onClick={() => openFolder('sent')}
+            >
+              <i className="bi bi-send" aria-hidden="true" />
+              Sent
+            </Nav.Link>
+          </Nav>
+
+          <div className="mailbox-storage">
+            <i className="bi bi-cloud-check" aria-hidden="true" />
+            <div>
+              <strong>Firebase synced</strong>
+              <span>Mail stays with your account</span>
+            </div>
+          </div>
+        </aside>
+
+        <section className="mailbox-content">
+          {sentNotice && (
+            <Alert
+              variant="success"
+              dismissible
+              onClose={() => setSentNotice('')}
+              className="mail-sent-alert"
+            >
+              <i className="bi bi-check-circle-fill me-2" aria-hidden="true" />
+              {sentNotice}
+            </Alert>
+          )}
+
+          {isComposing ? (
+            <ComposeMail
+              senderEmail={email}
+              onClose={() => setIsComposing(false)}
+              onSent={handleSent}
+            />
+          ) : activeFolder === 'welcome' ? (
+            <Card className="welcome-card border-0">
+              <Card.Body>
+                <div className="welcome-mail-icon" aria-hidden="true">
+                  <i className="bi bi-envelope-open-heart-fill" />
+                </div>
+                <Badge pill bg="light" text="primary" className="eyebrow">
+                  Login successful
+                </Badge>
+                <h1>Welcome to your mail box</h1>
+                <p>
+                  Write a thoughtful message, style it your way, and Postly will
+                  save a copy for both you and your recipient.
+                </p>
+
+                <Button
+                  variant="primary"
+                  size="lg"
+                  className="welcome-compose-button rounded-pill"
+                  onClick={() => setIsComposing(true)}
+                >
+                  <i className="bi bi-pencil-square me-2" aria-hidden="true" />
+                  Compose your first mail
+                </Button>
+
+                <Row className="g-3 welcome-stats">
+                  <Col sm={4}>
+                    <button
+                      type="button"
+                      className="welcome-stat"
+                      onClick={() => openFolder('inbox')}
+                    >
+                      <i className="bi bi-inbox" />
+                      <strong>Inbox</strong>
+                      <span>Mail sent to you</span>
+                    </button>
+                  </Col>
+                  <Col sm={4}>
+                    <div className="welcome-stat">
+                      <i className="bi bi-type-bold" />
+                      <strong>Rich editor</strong>
+                      <span>Bold and highlight</span>
+                    </div>
+                  </Col>
+                  <Col sm={4}>
+                    <button
+                      type="button"
+                      className="welcome-stat"
+                      onClick={() => openFolder('sent')}
+                    >
+                      <i className="bi bi-send" />
+                      <strong>Sent</strong>
+                      <span>Your outgoing mail</span>
+                    </button>
+                  </Col>
+                </Row>
+              </Card.Body>
+            </Card>
+          ) : (
+            <MailFolder
+              folder={activeFolder}
+              messages={messages}
+              loading={loadingMessages}
+              error={mailError}
+            />
+          )}
+        </section>
       </main>
     </div>
   )

@@ -6,6 +6,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
 } from 'firebase/auth'
+import { getMailboxFolder, sendMail } from './mailService'
 import App, { AUTH_EMAIL_KEY, AUTH_TOKEN_KEY } from './App'
 
 vi.mock('firebase/auth', () => ({
@@ -17,6 +18,27 @@ vi.mock('firebase/auth', () => ({
 vi.mock('./firebase', () => ({
   auth: { name: 'test-auth' },
   isFirebaseConfigured: true,
+}))
+
+vi.mock('./mailService', () => ({
+  getMailboxFolder: vi.fn(),
+  isMailDatabaseConfigured: true,
+  sendMail: vi.fn(),
+}))
+
+vi.mock('./RichTextEditor', () => ({
+  default: ({ onChange }) => (
+    <textarea
+      aria-label="Message body"
+      onChange={(event) =>
+        onChange({
+          html: `<p>${event.target.value}</p>`,
+          text: event.target.value,
+          isEmpty: event.target.value.trim() === '',
+        })
+      }
+    />
+  ),
 }))
 
 const fillSignupForm = async ({
@@ -254,6 +276,131 @@ describe('Login component', () => {
     expect(localStorage.getItem(AUTH_EMAIL_KEY)).toBeNull()
     expect(
       screen.getByRole('heading', { name: 'Sign in to Postly' }),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('Compose mail component', () => {
+  const renderMailbox = () => {
+    localStorage.setItem(AUTH_TOKEN_KEY, 'firebase-id-token')
+    localStorage.setItem(AUTH_EMAIL_KEY, 'sender@example.com')
+    const user = userEvent.setup()
+    render(<App />)
+    return user
+  }
+
+  const openComposer = async () => {
+    const user = renderMailbox()
+    await user.click(
+      screen.getByRole('button', { name: /compose your first mail/i }),
+    )
+    return user
+  }
+
+  const fillMessage = async (user) => {
+    await user.type(
+      await screen.findByLabelText('Recipient email'),
+      'receiver@example.com',
+    )
+    await user.type(screen.getByLabelText('Subject'), 'Project update')
+    await user.type(
+      await screen.findByLabelText('Message body'),
+      'The launch is going well.',
+    )
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    getMailboxFolder.mockResolvedValue([])
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('opens a composer with required recipient, subject, and body fields', async () => {
+    await openComposer()
+
+    expect(screen.getByLabelText('Recipient email')).toBeRequired()
+    expect(screen.getByLabelText('Subject')).toBeRequired()
+    expect(await screen.findByLabelText('Message body')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^send$/i })).toBeDisabled()
+  })
+
+  it('sends the rich message with the authenticated sender and token', async () => {
+    sendMail.mockResolvedValueOnce({
+      id: 'message-1',
+      senderEmail: 'sender@example.com',
+      recipientEmail: 'receiver@example.com',
+      subject: 'Project update',
+      bodyText: 'The launch is going well.',
+      createdAt: Date.now(),
+    })
+    const user = await openComposer()
+    await fillMessage(user)
+
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+
+    expect(sendMail).toHaveBeenCalledWith({
+      senderEmail: 'sender@example.com',
+      recipientEmail: 'receiver@example.com',
+      subject: 'Project update',
+      bodyHtml: '<p>The launch is going well.</p>',
+      bodyText: 'The launch is going well.',
+      token: 'firebase-id-token',
+    })
+    expect(
+      await screen.findByText(
+        'Your message to receiver@example.com was sent.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the Firebase error when sending fails', async () => {
+    sendMail.mockRejectedValueOnce(new Error('Permission denied'))
+    const user = await openComposer()
+    await fillMessage(user)
+
+    await user.click(screen.getByRole('button', { name: /^send$/i }))
+
+    expect(await screen.findByText('Permission denied')).toBeInTheDocument()
+  })
+
+  it('retrieves inbox mail for the authenticated email address', async () => {
+    getMailboxFolder.mockResolvedValueOnce([
+      {
+        id: 'message-2',
+        senderEmail: 'friend@example.com',
+        recipientEmail: 'sender@example.com',
+        subject: 'Hello from your inbox',
+        bodyText: 'A saved Firebase message.',
+        createdAt: Date.now(),
+      },
+    ])
+    const user = renderMailbox()
+
+    await user.click(screen.getByRole('button', { name: /^inbox$/i }))
+
+    expect(getMailboxFolder).toHaveBeenCalledWith({
+      email: 'sender@example.com',
+      folder: 'inbox',
+      token: 'firebase-id-token',
+    })
+    expect(
+      await screen.findByText('Hello from your inbox'),
+    ).toBeInTheDocument()
+  })
+
+  it('closes and discards the compose screen without sending', async () => {
+    const user = await openComposer()
+
+    await user.click(screen.getByRole('button', { name: 'Discard draft' }))
+
+    expect(sendMail).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole('heading', { name: 'Welcome to your mail box' }),
     ).toBeInTheDocument()
   })
 })
