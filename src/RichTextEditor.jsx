@@ -2,6 +2,7 @@ import { EditorContent, useEditor, useEditorState } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Highlight from '@tiptap/extension-highlight'
 import { Button, ButtonGroup, Stack } from 'react-bootstrap'
+import { selectEditorState } from './editorState'
 
 const highlightColors = [
   { color: '#fff1a8', label: 'Highlight yellow' },
@@ -52,20 +53,11 @@ function RichTextEditor({ onChange }) {
 
   const editorState = useEditorState({
     editor,
-    selector: ({ editor: currentEditor }) => ({
-      isBold: currentEditor?.isActive('bold') ?? false,
-      isItalic: currentEditor?.isActive('italic') ?? false,
-      isBulletList: currentEditor?.isActive('bulletList') ?? false,
-      isOrderedList: currentEditor?.isActive('orderedList') ?? false,
-      highlightColor:
-        currentEditor?.getAttributes('highlight')?.color ?? null,
-      canUndo: currentEditor?.can().chain().focus().undo().run() ?? false,
-      canRedo: currentEditor?.can().chain().focus().redo().run() ?? false,
-    }),
+    selector: selectEditorState,
   })
 
   if (!editor) {
-    return <div className="compose-editor-loading">Opening editor…</div>
+    return <div className="compose-editor-loading">Opening editor...</div>
   }
 
   return (
